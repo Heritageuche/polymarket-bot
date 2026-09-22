@@ -1,0 +1,45 @@
+# ---- Bankroll & goal ----
+bankroll_start: 1000.00         # set this to YOUR bankroll; used for paper mode and the risk framework printout
+daily_target_pct: 0.10          # +10% of start-of-day equity -> stop opening NEW trades for the day
+day_timezone: America/New_York  # trading-day boundary
+
+# ---- Universe ----
+assets: [btc, eth, sol, xrp]
+intervals: [5m, 15m, 1h, 4h]    # supported: 5m 15m 1h 4h 1d
+
+# ---- Loop ----
+poll_seconds: 2.0
+discovery_seconds: 20.0
+warmup_seconds: 90              # no entries until the feed has this much history after start
+
+# ---- Entry filters ----
+min_edge: 0.03                  # q - net cost must exceed this before we even size
+min_seconds_remaining: 40       # never enter a window with less time than this
+max_seconds_remaining: 900      # don't enter more than this far from resolution (vol model is short-horizon)
+entry_ttl_seconds: 25           # cancel an unfilled maker entry after this
+prefer_maker: true              # post-only limit first (no taker fee, earns rebate)
+allow_taker: true               # take liquidity when edge survives the taker fee
+
+# ---- Kelly / risk (see docs/RISK_FRAMEWORK.md) ----
+drawdown_level: 0.5             # "x": the drawdown we want to be unlikely
+drawdown_prob: 0.05             # "P": acceptable probability of ever hitting x under continuous Kelly betting
+model_uncertainty_floor: 0.05   # std-dev floor on our probability estimate (never trust the model more than this)
+max_fraction_per_trade: 0.20    # absolute cap per position (fraction of equity)
+max_total_exposure: 0.50        # cap on sum of open position fractions
+max_positions: 6
+daily_loss_z: 2.5               # halt new entries when today's P/L is this many sigmas below the model's expectation
+daily_loss_min_trades: 5        # ...but only after this many resolved trades today
+daily_hard_loss_floor: 0.08     # hard floor (fraction of start-of-day equity) regardless of z-test
+daily_hard_loss_cap: 0.25
+
+# ---- Exit policy ----
+exit_min_improvement: 0.0005    # required gain in expected log-growth before we act (hysteresis)
+exit_check_seconds: 3
+exit_min_hold_seconds: 20  # never re-evaluate a position in its first N seconds (fill noise)
+exit_conservative_sigmas: 1.0  # an exit must still be +EV if our q is off by this many sigmas in the position's favour
+
+# ---- Learning ----
+learn_min_trades: 40            # no parameter updates before this many resolved trades
+learn_every_trades: 20          # re-evaluate every N resolved trades (and at day rollover)
+learn_max_step: 0.3             # max fraction of the way we move toward a newly fitted parameter set
+block_bucket_min_n: 25          # a signal bucket is blocked when n>=this and its ROI upper-conf-bound < 0
