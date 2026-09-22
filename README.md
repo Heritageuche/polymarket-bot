@@ -4,12 +4,12 @@ Trades Bitcoin / ETH / SOL / XRP "Up or Down" markets (5m, 15m, 1h, 4h) with Kel
 a log-utility exit policy, daily target/loss halts, a full trade journal and a guarded learning loop.
 Read `docs/RISK_FRAMEWORK.md` before running it.
 
-> **⚠️ No stop limits in v1.** This release has **no stop-loss, no stop-limit and no per-trade
-> stop orders**. A position is sized by Kelly and then held to resolution unless the log-utility
-> exit policy says selling raises expected growth — the maximum loss on any single trade is the
-> stake. The only automatic halts are at the *day* level (+10 % target latch, model-failure loss
-> halt, hard floor) and the manual `pause` / `stop` / `kill` controls below. **Stop limits are
-> planned for v2** — see [Roadmap](#roadmap).
+> **⚠️ Risk control in v1 is day-level, not per-trade.** Size comes from fractional Kelly and
+> positions are exited by the log-utility policy; there are no per-trade stop-limit orders, because
+> on a binary contract the maximum loss on a trade is already the stake. The automatic halts are all
+> at the *day* level — +10 % target latch, model-failure loss halt, hard floor — plus the manual
+> `pause` / `stop` / `kill` controls below. **v2 is a much stricter regime against drawdown** — see
+> [Roadmap](#roadmap).
 
 ## Setup
 
@@ -108,17 +108,20 @@ journal row is touched by stopping, so restarts resume cleanly (open trades are 
 * Paper fills for resting maker orders are a heuristic (fill when the book trades through, or after 8 s at
   the touch). Treat paper P/L as optimistic.
 
+
 ## Roadmap
 
-### v2 — stop limits
+### v2 — stricter drawdown protection
 
-v1 ships without them on purpose (see `docs/RISK_FRAMEWORK.md` §2: on a binary contract the
-maximum loss *is* the stake, so a naive price stop mostly just realises noise). v2 adds explicit,
-configurable stop behaviour on top of the existing exit policy:
+v1 defends the bankroll with Kelly sizing and a single-day floor. v2 tightens that into a
+multi-layer drawdown regime:
 
-* per-trade stop-limit orders with a configurable trigger and limit offset
-* trailing stops on open positions, measured in model probability rather than raw price
-* per-bucket stop rules (asset / interval / time-of-day) driven by the calibration study
-* a hard per-trade loss cap that overrides the log-utility exit
+* a **rolling multi-day drawdown governor** that scales the Kelly fraction down as drawdown deepens,
+  instead of resetting to full size at every day boundary
+* a **hard per-trade loss cap** that overrides the log-utility exit
+* **stop-limit orders** per position, with a configurable trigger and limit offset
+* **trailing stops measured in model probability** rather than raw price, so noise does not trigger them
+* **per-bucket stop rules** (asset / interval / time-of-day) driven by the calibration study
+* a **cool-off period after a halt** — reduced size on re-entry rather than an immediate return to full Kelly
 
-Until then, treat the day-level halts and the manual controls as the only stops.
+Until v2 ships, the day-level halts and the manual controls are the only stops.
