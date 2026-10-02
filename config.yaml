@@ -32,6 +32,17 @@ daily_loss_min_trades: 5        # ...but only after this many resolved trades to
 daily_hard_loss_floor: 0.08     # hard floor (fraction of start-of-day equity) regardless of z-test
 daily_hard_loss_cap: 0.25
 
+# ---- v2 drawdown regime ----
+# v1 compared only *realised* P/L against the hard floor, so money sitting in unresolved
+# positions was invisible to the stop. 2026-09-17: the halt fired at -26.7% with $37 still
+# open, and the day finished at -44.7%. These three settings make the floor a bound.
+risk_budget_enabled: true       # never allow (realised loss + open stake) to exceed the hard floor
+mark_to_market_halt: true       # halt on live marked equity, not only on resolved trades
+max_cluster_exposure: 0.15      # cap on positions sharing a direction (they are one correlated bet)
+cluster_by: side                # 'side' (all Up together) | 'asset_side' (per coin) | 'none'
+min_seconds_between_entries: 60 # stop firing the whole book into one signal
+
+
 # ---- Exit policy ----
 exit_min_improvement: 0.0005    # required gain in expected log-growth before we act (hysteresis)
 exit_check_seconds: 3

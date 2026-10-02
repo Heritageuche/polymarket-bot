@@ -89,12 +89,39 @@ class DayManager:
                 d.halt_reason = f"today's P/L is {z:.1f} sigma below the model's expectation -> model likely wrong today"
 
     def update_equity(self, equity: float):
+        """Called every tick with mark-to-market equity (open positions included).
+
+        v1 only looked at the upside target here, so a drawdown carried by *unresolved*
+        positions was invisible until those positions settled. v2 also halts on the live
+        mark, which is what `compute_equity` already gives us.
+        """
         d = self.day
         if d.start_equity <= 0:
             return
         if not d.target_hit and equity >= d.start_equity * (1 + self.cfg.daily_target_pct):
             d.target_hit = True
             d.save()
+        if self.cfg.mark_to_market_halt and not d.loss_halt and \
+                equity <= d.start_equity * (1 - d.hard_floor_frac):
+            d.loss_halt = True
+            d.halt_reason = (f"mark-to-market drawdown {1 - equity / d.start_equity:.1%} "
+                             f"(floor {d.hard_floor_frac:.1%})")
+            d.save()
+
+    def risk_budget_usd(self, at_risk_usd: float) -> float:
+        """Dollars that may still be put at risk today without the day being able to breach
+        the hard floor.
+
+        On a binary market an open stake can go to zero, so money already on the table counts
+        against the floor exactly like a realised loss. v1 compared only *realised* P/L against
+        the floor, which made the floor a tripwire you noticed after crossing; budgeting the
+        worst case before entry makes it a bound.
+        """
+        d = self.day
+        if d.start_equity <= 0 or not self.cfg.risk_budget_enabled:
+            return float("inf")
+        spent = -min(0.0, d.realized_pnl)
+        return d.hard_floor_frac * d.start_equity - spent - max(0.0, at_risk_usd)
 
     @property
     def entries_allowed(self) -> bool:

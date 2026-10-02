@@ -5,3 +5,5 @@ state/
 control/
 __pycache__/
 *.pyc
+.env.bak
+.env.*

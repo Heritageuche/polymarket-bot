@@ -4,12 +4,14 @@ Trades Bitcoin / ETH / SOL / XRP "Up or Down" markets (5m, 15m, 1h, 4h) with Kel
 a log-utility exit policy, daily target/loss halts, a full trade journal and a guarded learning loop.
 Read `docs/RISK_FRAMEWORK.md` before running it.
 
-> **⚠️ Risk control in v1 is day-level, not per-trade.** Size comes from fractional Kelly and
-> positions are exited by the log-utility policy; there are no per-trade stop-limit orders, because
-> on a binary contract the maximum loss on a trade is already the stake. The automatic halts are all
-> at the *day* level — +10 % target latch, model-failure loss halt, hard floor — plus the manual
-> `pause` / `stop` / `kill` controls below. **v2 is a much stricter regime against drawdown** — see
-> [Roadmap](#roadmap).
+> **⚠️ Risk control is day-level, not per-trade.** Size comes from fractional Kelly and positions are
+> exited by the log-utility policy; there are no per-trade stop-limit orders, because on a binary
+> contract the maximum loss on a trade is already the stake. The automatic halts are at the *day*
+> level — +10 % target latch, model-failure loss halt, hard floor — plus the manual `pause` / `stop` /
+> `kill` controls below. **v2 makes the daily floor a bound rather than a tripwire**: open stake is
+> budgeted against it before entry, correlated positions share one cap, and the halt reads
+> mark-to-market equity. See [v2: the drawdown regime](#v2-the-drawdown-regime). Several roadmap items
+> are still open — see [Roadmap](#roadmap).
 
 ## Setup
 
@@ -87,13 +89,33 @@ journal row is touched by stopping, so restarts resume cleanly (open trades are 
    the window open `K`, spot `S`, and a volatility estimate; `P(Up) = Φ(ln(S/K)/σ√τ)` with TWAP-adjusted τ.
    A learned logistic layer blends that with the market's own price and momentum (starts 50/50).
 2. **Sizing** (`strategy/kelly.py`): fractional Kelly with drawdown-derived multiplier and estimation-error
-   shrinkage; maker (post-only) orders first because takers pay 3.5 % at the money.
+   shrinkage, then four caps — per-trade, total exposure, correlated-cluster exposure and the day's
+   remaining risk budget; maker (post-only) orders first because takers pay 3.5 % at the money.
 3. **Exit** (`strategy/exit_policy.py`): sell/hedge only when it raises expected log growth.
-4. **Day** (`risk/daily.py`): +10 % target latch, model-failure loss halt, hard floor.
+4. **Day** (`risk/daily.py`): +10 % target latch, model-failure loss halt, hard floor, mark-to-market
+   halt and the worst-case risk budget.
 5. **Learning** (`learning/`): every taken *and* shadow signal is journaled and resolved; parameters are
    re-fitted with a prior centred on the current values, accepted only on time-ordered hold-out
    improvement, applied 30 % of the way, versioned. Losing buckets (asset/interval/edge/z/time/momentum)
    are blocked once their optimistic ROI bound is negative.
+
+## v2: the drawdown regime
+
+v1 compared only **realised** P/L against the hard floor, so money in unresolved positions was invisible
+to the stop. On 2026-09-17 the halt fired at −26.7 % with $37.13 still open and the day finished at
+−44.7 % — on a 25 % stop. All eight trades that day were "Up" on btc/eth/sol/xrp, which is one bet
+placed eight times, not a diversified book.
+
+| setting | default | what it does |
+|---------|---------|--------------|
+| `risk_budget_enabled` | `true` | open stake counts against the floor like a realised loss; orders are shrunk to the remaining budget, so no sequence of resolutions can breach it |
+| `max_cluster_exposure` | `0.15` | one cap for all positions sharing a direction |
+| `cluster_by` | `side` | `side` · `asset_side` · `none` (v1 behaviour) |
+| `mark_to_market_halt` | `true` | halt on live marked equity, not only on settled trades |
+| `min_seconds_between_entries` | `60` | stop firing the whole book into one signal |
+
+Replaying 2026-09-17 through all four caps the worst case at **−15.0 %** instead of −44.7 %. See
+`docs/RISK_FRAMEWORK.md` § 3a and `tests/test_drawdown_regime.py`.
 
 ## Known limits
 
@@ -111,10 +133,16 @@ journal row is touched by stopping, so restarts resume cleanly (open trades are 
 
 ## Roadmap
 
-### v2 — stricter drawdown protection
+### Shipped in v2
 
-v1 defends the bankroll with Kelly sizing and a single-day floor. v2 tightens that into a
-multi-layer drawdown regime:
+* a **worst-case risk budget** — open stake is charged against the daily floor before entry, so the
+  floor bounds the day instead of being noticed after it is crossed
+* a **correlated-cluster exposure cap** — same-direction positions share one limit, because Kelly's
+  independence assumption is what justified holding six of them
+* a **mark-to-market halt** — drawdown carried by unresolved positions now stops new entries
+* an **entry cooldown** — no more firing the whole book into a single signal
+
+### Still open
 
 * a **rolling multi-day drawdown governor** that scales the Kelly fraction down as drawdown deepens,
   instead of resetting to full size at every day boundary
@@ -122,6 +150,6 @@ multi-layer drawdown regime:
 * **stop-limit orders** per position, with a configurable trigger and limit offset
 * **trailing stops measured in model probability** rather than raw price, so noise does not trigger them
 * **per-bucket stop rules** (asset / interval / time-of-day) driven by the calibration study
-* a **cool-off period after a halt** — reduced size on re-entry rather than an immediate return to full Kelly
-
-Until v2 ships, the day-level halts and the manual controls are the only stops.
+* **reduced size on re-entry after a halt**, rather than an immediate return to full Kelly
+* the exit policy is rarely the binding control in practice — 19 of the first 21 trades closed as
+  `held to resolution`, so `exit_min_improvement` is worth revisiting

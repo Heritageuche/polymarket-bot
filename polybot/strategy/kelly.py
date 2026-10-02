@@ -57,26 +57,38 @@ class SizeDecision:
 
 
 def size_position(q: float, price: float, fee_per_share: float, equity: float, cfg, n_eff: int,
-                  current_exposure_frac: float, min_shares: float) -> SizeDecision:
+                  current_exposure_frac: float, min_shares: float,
+                  cluster_exposure_frac: float = 0.0, budget_usd: float = float("inf")) -> SizeDecision:
+    """Kelly size, then four caps: per-trade, total exposure, correlated-cluster exposure and
+    the day's remaining worst-case risk budget (`budget_usd`).
+
+    The cluster cap exists because Kelly's sizing assumes the open positions are independent
+    bets. Four crypto 'Up' positions are one bet placed four times, so they are capped as one.
+    """
     cost = price + fee_per_share
     edge = q - cost
     f_full = kelly_fraction(q, cost)
     k_dd = drawdown_multiplier(cfg.drawdown_level, cfg.drawdown_prob)
     s = q_std(q, n_eff, cfg.model_uncertainty_floor)
     f_shrunk = f_full * uncertainty_shrink(edge, s)
-    f = min(k_dd * f_shrunk, cfg.max_fraction_per_trade)
-    f = min(f, max(0.0, cfg.max_total_exposure - current_exposure_frac))
+    f_cap = min(cfg.max_fraction_per_trade,
+                max(0.0, cfg.max_total_exposure - current_exposure_frac),
+                max(0.0, cfg.max_cluster_exposure - cluster_exposure_frac))
+    if equity > 0 and budget_usd < float("inf"):
+        f_cap = min(f_cap, max(0.0, budget_usd) / equity)
+    f = min(k_dd * f_shrunk, f_cap)
     stake = f * equity
     shares = math.floor(stake / cost) if cost > 0 else 0
     reason = "ok"
     if edge < cfg.min_edge:
         return SizeDecision(0, 0, 0, f_full, f_shrunk, k_dd, edge, 0.0, "edge below min_edge")
+    if f_cap <= 0:
+        return SizeDecision(0, 0, 0, f_full, f_shrunk, k_dd, edge, 0.0, "no risk capacity left")
     if shares < min_shares:
         # Would the exchange minimum still be a +growth bet? Only then round up to it.
         f_min = min_shares * cost / equity
         g = expected_log_growth(q, cost, f_min)
-        if g > 0 and f_min <= cfg.max_fraction_per_trade and f_min <= k_dd * f_full \
-                and f_min <= cfg.max_total_exposure - current_exposure_frac + 1e-12:
+        if g > 0 and f_min <= k_dd * f_full and f_min <= f_cap + 1e-12:
             shares = min_shares; stake = shares * cost; f = f_min; reason = "rounded up to exchange minimum"
         else:
             return SizeDecision(0, 0, 0, f_full, f_shrunk, k_dd, edge, g, "below exchange minimum after shrinkage")

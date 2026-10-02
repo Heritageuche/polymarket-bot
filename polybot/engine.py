@@ -78,6 +78,7 @@ class Engine:
         self.books: Dict[str, Book] = {}
         self.blocked = store.blocked()
         self.last_discovery = 0.0
+        self.last_entry_at = 0.0
         self.resolved_since_learn = 0
         self.resolved_signals_since_learn = 0
         self.resolution_wait: Dict[str, float] = {}
@@ -139,7 +140,31 @@ class Engine:
     def exposure_fraction(self) -> float:
         if self.equity <= 0:
             return 1.0
-        return sum(c.cost_basis - c.cash_in for c in self.trades.values()) / self.equity
+        return self.at_risk_usd() / self.equity
+
+    def at_risk_usd(self) -> float:
+        """Money currently on the table. On a binary market this is what a loss costs."""
+        return sum(c.cost_basis - c.cash_in for c in self.trades.values())
+
+    def cluster_key(self, asset: str, side: str) -> str:
+        mode = self.cfg.cluster_by
+        if mode == "none":
+            return ""
+        return f"{asset}:{side}" if mode == "asset_side" else side
+
+    def cluster_exposure_fraction(self, asset: str, side: str) -> float:
+        """Exposure of the correlated group this entry would join.
+
+        btc/eth/sol/xrp move as one herd, so several same-direction positions are a single
+        bet repeated, not a diversified book. They share one cap.
+        """
+        if self.equity <= 0:
+            return 1.0
+        key = self.cluster_key(asset, side)
+        if not key:
+            return 0.0
+        return sum(c.cost_basis - c.cash_in for c in self.trades.values()
+                   if self.cluster_key(c.market.asset, c.side) == key) / self.equity
 
     # ------------------------------------------------------------------ main loop
     def run(self):
@@ -465,7 +490,10 @@ class Engine:
                     options.append(("taker", book.best_ask, m.taker_fee_per_share(book.best_ask)))
                 best = None
                 for kind, px, fee in options:
-                    sz = size_position(q, px, fee, self.equity, self.cfg, self.params.n_fit, self.exposure_fraction(), m.min_size)
+                    sz = size_position(q, px, fee, self.equity, self.cfg, self.params.n_fit,
+                                       self.exposure_fraction(), m.min_size,
+                                       cluster_exposure_frac=self.cluster_exposure_fraction(m.asset, side),
+                                       budget_usd=self.day.risk_budget_usd(self.at_risk_usd()))
                     if sz.shares > 0 and (best is None or sz.growth > best[1].growth):
                         best = ((kind, px, fee), sz)
                 feats = dict(est.features, side=side)
@@ -473,7 +501,12 @@ class Engine:
                         "side": side, "features": feats}
                 blocked = [k for k in bucket_keys(stub) if k in self.blocked]
                 skip = None
-                if best is None:
+                if self.day.risk_budget_usd(self.at_risk_usd()) <= 0:
+                    skip = "daily risk budget exhausted"
+                elif now - self.last_entry_at < self.cfg.min_seconds_between_entries:
+                    skip = (f"entry cooldown "
+                            f"{self.cfg.min_seconds_between_entries - (now - self.last_entry_at):.0f}s")
+                elif best is None:
                     skip = "no positive-growth size"
                 elif blocked:
                     skip = "blocked bucket " + ",".join(blocked)
@@ -507,6 +540,7 @@ class Engine:
                 p.reason = (f"{kind} q={q:.3f} vs cost {px+fee:.3f}: edge {sz.edge:+.3f}, z={est.z:+.2f}, "
                             f"sigma={est.sigma_per_sec*math.sqrt(est.tau_eff):.4f}, mom_z={est.mom_z:+.2f}, {sz.reason}")
                 self.pending[o.order_id] = p
+                self.last_entry_at = now
                 log.info("ENTRY %s %s %s %.0f sh @ %.3f  q=%.3f edge=%+.3f f=%.3f (full %.3f x k %.2f)", m.slug, side, kind,
                          sz.shares, px, q, sz.edge, sz.fraction, sz.f_full, sz.k_dd)
                 if o.filled > 0:
