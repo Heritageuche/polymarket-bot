@@ -55,9 +55,50 @@ Daily halts stop **new entries only**:
 * **Model-failure test**: after ≥ 5 resolved trades, halt when today's realised P/L is 2.5σ below the
   model's own expectation (Σ EV, Σ variance of today's trades). A loss that is merely unlucky does not
   trigger it; a loss inconsistent with the model does.
-* **Hard floor**: −8 % of start-of-day equity (3σ of a typical day under the model, clamped to 8–25 %).
+* **Hard floor**: 3σ of a typical day under the model, clamped to 8–25 % of start-of-day equity. The
+  inputs to that σ are fixed (q = 0.58, price = 0.50, 20 trades), so in practice it evaluates to the
+  25 % cap every day — treat `daily_hard_loss_cap` as the real setting.
 * **Daily target**: +10 % of start-of-day equity, latched for the day. It only flips one boolean; position
   management, journaling, shadow signals and learning continue unchanged.
+
+## 3a. The v2 drawdown regime
+
+v1 measured all of the above against **realised** P/L only. Money sitting in unresolved positions was
+invisible to the stop, so the floor was a tripwire you noticed after crossing rather than a bound.
+
+2026-09-17 is the worked example. Start equity $205.89, floor 25 % = $51.47:
+
+| time | event | realised |
+|------|-------|----------|
+| 05:00:08–05:01:00 | five "Up" positions opened in 52 s, $62.63 staked | $0 |
+| 05:07:46 | two settle against | −$31.50 |
+| 05:07:05–05:11:32 | three *more* "Up" positions opened, $29.50 | |
+| 05:12:43 | floor crossed → halt fires, $37.13 still open | −$55.00 |
+| 05:17:45 | the rest settle | **−$92.13 (−44.7 %)** |
+
+All eight trades were "Up" on btc/eth/sol/xrp. Those four move as one herd, so that is a single bet
+placed eight times — but Kelly sized each one as if it were independent, which is the assumption that
+justifies holding six at once. (2026-09-16 is the same pattern inverted: five "Up", all winners, +46 %.)
+
+Three controls, all in `config.yaml`:
+
+* **Risk budget** (`risk_budget_enabled`). An open stake on a binary market can go to zero, so it counts
+  against the floor exactly like a realised loss. Before sizing, the engine computes
+  `floor − realised_loss − open_stake` and caps the order at what is left. The order is shrunk to fit
+  rather than rejected outright. This is what turns the floor into a bound: no sequence of resolutions
+  can take the day past it.
+* **Cluster cap** (`max_cluster_exposure`, `cluster_by`). Positions sharing a direction share one
+  exposure cap, default 15 %. `cluster_by: side` treats every "Up" as one bet; `asset_side` caps per
+  coin; `none` restores v1 behaviour.
+* **Mark-to-market halt** (`mark_to_market_halt`). `compute_equity()` already marks open positions every
+  tick; v1 only compared that number against the +10 % upside target. v2 also halts on it, so a drawdown
+  carried by open positions stops new entries without waiting for settlement.
+
+Plus `min_seconds_between_entries` (default 60 s), which stops the book being fired into one signal.
+
+Replaying 2026-09-17 through all four: one position taken at $18.60, one at $12.28 (cut from $13.50 by
+the cluster cap), the other six blocked. Worst case **−$30.88 (−15.0 %)** against the actual −$92.13.
+The cluster cap binds first, so the risk budget is never even reached.
 
 ## 4. What is honest about the goal
 

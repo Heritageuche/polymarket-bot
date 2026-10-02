@@ -39,6 +39,12 @@ class Config:
     daily_loss_min_trades: int = 5
     daily_hard_loss_floor: float = 0.08
     daily_hard_loss_cap: float = 0.25
+    # v2 drawdown regime
+    risk_budget_enabled: bool = True
+    mark_to_market_halt: bool = True
+    max_cluster_exposure: float = 0.15
+    cluster_by: str = "side"          # 'side' | 'asset_side' | 'none'
+    min_seconds_between_entries: float = 60.0
     exit_min_improvement: float = 0.0005
     exit_check_seconds: float = 3.0
     exit_min_hold_seconds: float = 20.0
